@@ -1,6 +1,7 @@
 import os
 import sys
 import copy
+import re
 
 class TextEditor:
     def __init__(self):
@@ -118,10 +119,16 @@ class TextEditor:
             print("✗ No search term provided.")
             return []
             
+        match_case = input("Match case? (y/N): ").strip().lower() == 'y'
+            
         results = []
         for i, line in enumerate(self.content):
-            if search_term.lower() in line.lower():
-                results.append((i + 1, line))
+            if match_case:
+                if search_term in line:
+                    results.append((i + 1, line))
+            else:
+                if search_term.lower() in line.lower():
+                    results.append((i + 1, line))
                 
         if results:
             print(f"\n✓ Found {len(results)} occurrence(s):\n")
@@ -144,14 +151,26 @@ class TextEditor:
             print("✗ No search term provided.")
             return 0
             
+        match_case = input("Match case? (y/N): ").strip().lower() == 'y'
+        replace_all = input("Replace all occurrences? (Y/n): ").strip().lower() != 'n'
+            
         self.save_state()
         count = 0
         
+        flags = 0 if match_case else re.IGNORECASE
+        pattern = re.compile(re.escape(search_term), flags)
+        
         for i, line in enumerate(self.content):
-            if search_term in line:
-                occurrences = line.count(search_term)
-                self.content[i] = line.replace(search_term, replace_term)
-                count += occurrences
+            if pattern.search(line):
+                if not replace_all:
+                    new_line, num_subs = pattern.subn(lambda m: replace_term, line, count=1)
+                    self.content[i] = new_line
+                    count += num_subs
+                    break
+                else:
+                    new_line, num_subs = pattern.subn(lambda m: replace_term, line)
+                    self.content[i] = new_line
+                    count += num_subs
                 
         if count > 0:
             self.modified = True
