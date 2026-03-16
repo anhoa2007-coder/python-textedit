@@ -5,12 +5,17 @@ Compatible with Python 3.8–3.11 / libraries available up to early 2023.
 
 Keybindings
 -----------
-  Ctrl+S  Save          Ctrl+O  Open          Ctrl+N  New
+  Ctrl+S  Save          Ctrl+O  Open          Ctrl+W  New file
   Ctrl+Z  Undo          Ctrl+Y  Redo
-  Ctrl+F  Find          Ctrl+R  Find & Replace
+  Ctrl+F  Find (plain or regex)   Ctrl+N  Find next match
+  Ctrl+R  Find & Replace (plain or regex)
   Ctrl+G  Go to line    Ctrl+Q  Quit
   Home/End  BOL / EOL   PgUp/PgDn  Page scroll
   Arrows  Move cursor   Enter  New line       Bksp/Del  Delete
+
+Search / Replace accept plain text or a Python regex.
+When prompted, answer [r]egex or [p]lain (default plain).
+In regex replace strings, back-references like \\1 work normally.
 """
 
 import os
@@ -93,8 +98,10 @@ class TextEditor:
         self._status_msg:  str  = ""
         self._status_kind: str  = "inf"   # "ok" | "err" | "inf"
 
-        # search state (for repeat-find)
-        self._last_search: str = ""
+        # search state (for repeat-find with Ctrl+N)
+        self._last_search: str  = ""
+        self._last_regex:  bool = False   # True → last search used regex mode
+        self._last_pat:    "re.Pattern | None" = None  # compiled, ready to reuse
 
     # ── undo / redo ──────────────────────────────────────────────────────────
 
@@ -220,49 +227,121 @@ class TextEditor:
         except OSError as exc:
             self._set_status(f"Save error: {exc}", "err")
 
+    # ── search helpers ────────────────────────────────────────────────────────
+
+    def _ask_mode(self, stdscr) -> bool:
+        """Ask whether the user wants regex or plain search.
+        Returns True for regex, False for plain text.
+        Pressing Enter / 'p' → plain; 'r' → regex; Esc → plain (cancel-safe).
+        """
+        h, w = stdscr.getmaxyx()
+        prompt = " Search mode:  [p]lain (Enter)  [r]egex  "
+        stdscr.addstr(h - 2, 0, " " * (w - 1))
+        try:
+            stdscr.addstr(h - 2, 0, prompt[:w], _C.get("status_inf", 0))
+        except curses.error:
+            pass
+        stdscr.refresh()
+        while True:
+            k = stdscr.getch()
+            if k in (ord('r'), ord('R')):
+                return True
+            if k in (ord('p'), ord('P'), 10, 13, 27):
+                return False
+
+    def _compile_pattern(self, stdscr, term: str, regex: bool) -> "re.Pattern | None":
+        """Compile search pattern; show error and return None on bad regex."""
+        try:
+            if regex:
+                pat = re.compile(term, re.MULTILINE)
+            else:
+                pat = re.compile(re.escape(term), re.IGNORECASE)
+            return pat
+        except re.error as exc:
+            self._set_status(f"Bad regex: {exc}", "err")
+            return None
+
     # ── search / replace ──────────────────────────────────────────────────────
 
-    def _find_next(self, stdscr, term: str | None = None) -> bool:
-        """Jump to the next occurrence of `term` (wraps around)."""
-        if term is None:
-            term = self._prompt(stdscr, "Find: ", self._last_search)
-        if not term:
-            return False
-        self._last_search = term
+    def _find_next(self, stdscr, term: str | None = None,
+                   regex: bool | None = None, repeat: bool = False) -> bool:
+        """Jump to the next occurrence, wrapping around.
+
+        If *repeat* is True the method reuses _last_pat without prompting,
+        which is what Ctrl+N does.
+        """
+        if repeat and self._last_pat is not None:
+            pat = self._last_pat
+        else:
+            if term is None:
+                term = self._prompt(stdscr, "Find: ", self._last_search)
+            if not term:
+                return False
+            if regex is None:
+                regex = self._ask_mode(stdscr)
+            pat = self._compile_pattern(stdscr, term, regex)
+            if pat is None:
+                return False
+            self._last_search = term
+            self._last_regex  = regex
+            self._last_pat    = pat
 
         total = len(self.content)
-        pat   = re.compile(re.escape(term), re.IGNORECASE)
+        # Start scanning from one character after the current cursor position
+        # so repeated Ctrl+N advances instead of staying on the same match.
+        start_cy, start_cx = self.cy, self.cx + 1
 
-        # search from just after the current position
-        for offset in range(1, total + 1):
-            idx  = (self.cy + offset) % total
+        for offset in range(total):
+            idx  = (start_cy + offset) % total
             line = self.content[idx]
-            m    = pat.search(line)
+            # On the starting line, respect column offset
+            col_start = start_cx if offset == 0 else 0
+            m = pat.search(line, col_start)
             if m:
                 self.cy = idx
                 self.cx = m.start()
-                self._set_status(f"Found '{term}'  (line {idx+1})", "ok")
+                mode_tag = " [re]" if self._last_regex else ""
+                self._set_status(
+                    f"Found{mode_tag} '{self._last_search}'  (line {idx+1}, col {m.start()+1})",
+                    "ok",
+                )
                 return True
 
-        self._set_status(f"'{term}' not found", "err")
+        self._set_status(f"'{self._last_search}' not found", "err")
         return False
 
     def _replace_all(self, stdscr):
         term = self._prompt(stdscr, "Find: ", self._last_search)
         if not term:
             return
+        regex = self._ask_mode(stdscr)
+        pat   = self._compile_pattern(stdscr, term, regex)
+        if pat is None:
+            return
+
         self._last_search = term
-        repl  = self._prompt(stdscr, "Replace with: ")
-        pat   = re.compile(re.escape(term), re.IGNORECASE)
+        self._last_regex  = regex
+        self._last_pat    = pat
+
+        repl = self._prompt(stdscr, "Replace with: ")
+        # For plain-text mode, escape the replacement so \1 etc. are literal.
+        repl_str = repl if regex else repl.replace("\\", "\\\\")
+
         self._save_state()
         count = 0
-        for i, line in enumerate(self.content):
-            new_line, n = pat.subn(repl, line)
-            self.content[i] = new_line
-            count += n
+        try:
+            for i, line in enumerate(self.content):
+                new_line, n = pat.subn(repl_str, line)
+                self.content[i] = new_line
+                count += n
+        except re.error as exc:
+            self._set_status(f"Replace error: {exc}", "err")
+            return
+
+        mode_tag = " [re]" if regex else ""
         if count:
             self.modified = True
-            self._set_status(f"Replaced {count} occurrence(s)", "ok")
+            self._set_status(f"Replaced{mode_tag} {count} occurrence(s)", "ok")
         else:
             self._set_status(f"'{term}' not found", "err")
 
@@ -359,8 +438,8 @@ class TextEditor:
         
         # ── footer key-hint bar ───────────────────────────────────────────────
         hints = (
-            "^S Save  ^O Open  ^N New  ^Z Undo  ^Y Redo  "
-            "^F Find  ^R Replace  ^G Goto  ^Q Quit"
+            "^S Save  ^O Open  ^W New  ^Z Undo  ^Y Redo  "
+            "^F Find  ^N Next  ^R Replace  ^G Goto  ^Q Quit"
         )
         try:
             stdscr.addstr(h - 1, 0, hints[:w], _C.get("footer", curses.A_REVERSE))
@@ -506,7 +585,7 @@ class TextEditor:
 
             elif key == 19:   self._save_file(stdscr)           # Ctrl+S
             elif key == 15:   self._open_file(stdscr)           # Ctrl+O
-            elif key == 14:   self._new_file(stdscr)            # Ctrl+N
+            elif key == 23:   self._new_file(stdscr)            # Ctrl+W  (new file)
             elif key == 26:                                       # Ctrl+Z
                 if not self._undo():
                     self._set_status("Nothing to undo", "inf")
@@ -517,7 +596,8 @@ class TextEditor:
                     self._set_status("Nothing to redo", "inf")
                 else:
                     self._set_status("Redo", "ok")
-            elif key == 6:    self._find_next(stdscr)           # Ctrl+F
+            elif key == 6:    self._find_next(stdscr)           # Ctrl+F  (new search)
+            elif key == 14:   self._find_next(stdscr, repeat=True)  # Ctrl+N  (next match)
             elif key == 18:   self._replace_all(stdscr)         # Ctrl+R
             elif key == 7:    self._goto_line(stdscr)           # Ctrl+G
 
