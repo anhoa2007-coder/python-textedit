@@ -1,9 +1,7 @@
 # Text Editor (Python)
 Text editor made with Python, as a basic project in part-time. It allow you to edit files using CLI based UI.
 
-ANNOUNCEMENT: THE LAST VERSION IS GOING TO RELEASE ON APRIL 1ST, 2026. I'm just losing interest of this program at this point.
-#### However, final update will be published on December 31st, 2026, due to intense delay of uploading each version.
-
+ANNOUNCEMENT: Final update will be published on December 31st, 2026.
 ---
 ## How It Works
 - **Core structure:**
