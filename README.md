@@ -1,8 +1,6 @@
 # Text Editor (Python)
 Text editor made with Python, as a basic project in part-time. It allows you to edit files using a terminal-based TUI powered by `curses`.
 
-> **ANNOUNCEMENT: Final update will be published on December 31st, 2026.**
-
 ---
 
 ## How It Works
