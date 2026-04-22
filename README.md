@@ -1,6 +1,6 @@
 # Text Editor (Python)
 Text editor made with Python, as a basic project in part-time. It allows you to edit files using a terminal-based TUI powered by `curses`.\
-*This app is no longer updated since April 1st, 2025 (final open-source update being April 9th, 2026). Consider move to [Edit](https://github.com/microsoft/edit) as alternative.*
+*This app is no longer updated since April 1st, 2025 (final open-source update being April 23rd, 2026). Consider move to [Edit](https://github.com/microsoft/edit) as alternative.*
 
 ---
 
